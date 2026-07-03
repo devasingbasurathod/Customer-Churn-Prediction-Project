@@ -5,7 +5,7 @@ import pickle
 # ----------------------------
 # Load Model
 # ----------------------------
-model = pickle.load(open("model.pkl", "rb"))
+model = pickle.load(open("label_encoders.pkl", "rb"))
 
 # ----------------------------
 # Page Configuration
