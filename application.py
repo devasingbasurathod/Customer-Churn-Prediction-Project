@@ -135,7 +135,7 @@ if st.button("🔍 Predict Churn"):
     }])
 
     prediction = model.predict(input_data)[0]
-
+    st.write(type(model))
     if prediction in ["Yes", 1]:
         st.error("⚠️ Customer is likely to Churn.")
     else:
