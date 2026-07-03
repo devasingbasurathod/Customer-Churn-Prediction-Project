@@ -134,8 +134,8 @@ if st.button("🔍 Predict Churn"):
         "TotalCharges": TotalCharges
     }])
 
-    prediction = model.predict(input_data)[0]
-    st.write(type(model))
+    prediction = label_encoders.predict(input_data)[0]
+    st.write(type(label_encoders))
     if prediction in ["Yes", 1]:
         st.error("⚠️ Customer is likely to Churn.")
     else:
