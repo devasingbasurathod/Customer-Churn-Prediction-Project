@@ -11,7 +11,11 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix
+)
 
 warnings.filterwarnings("ignore")
 
@@ -48,13 +52,19 @@ st.markdown(
     h1 {
         font-size: 2.7rem !important;
         font-weight: 700 !important;
-        color: #f5f5f5;
+        color: #f5f5f5 !important;
+    }
+
+    h2, h3 {
+        color: #f5f5f5 !important;
     }
 
     label {
         color: white !important;
         font-weight: 500 !important;
     }
+
+    /* Select boxes */
 
     div[data-baseweb="select"] > div {
         background-color: #262730 !important;
@@ -65,6 +75,8 @@ st.markdown(
     div[data-baseweb="select"] span {
         color: white !important;
     }
+
+    /* Number inputs */
 
     input {
         background-color: #262730 !important;
@@ -100,6 +112,7 @@ st.markdown(
         padding: 25px;
         border-radius: 12px;
         margin-top: 20px;
+        margin-bottom: 20px;
         text-align: center;
     }
 
@@ -118,12 +131,17 @@ st.markdown(
     .prediction-title {
         font-size: 28px;
         font-weight: 700;
-        margin-bottom: 10px;
+        margin-bottom: 12px;
     }
 
     .prediction-probability {
         font-size: 20px;
         font-weight: 500;
+        line-height: 1.7;
+    }
+
+    .classification {
+        font-size: 18px;
     }
 
     </style>
@@ -169,10 +187,10 @@ def prepare_data(df):
 
     df = df.copy()
 
-    # Remove spaces from column names
+    # Clean column names
     df.columns = df.columns.str.strip()
 
-    # Convert TotalCharges to numeric
+    # Convert TotalCharges
     if "TotalCharges" in df.columns:
 
         df["TotalCharges"] = pd.to_numeric(
@@ -180,7 +198,7 @@ def prepare_data(df):
             errors="coerce"
         )
 
-    # Convert Churn target
+    # Convert target to binary classification
     if "Churn" in df.columns:
 
         df["Churn"] = (
@@ -197,7 +215,7 @@ def prepare_data(df):
             )
         )
 
-    # Customer ID should not be used as a model feature
+    # Remove customer ID
     if "customerID" in df.columns:
 
         df = df.drop(
@@ -208,7 +226,7 @@ def prepare_data(df):
 
 
 # ============================================================
-# TRAIN MODEL
+# TRAIN CLASSIFICATION MODEL
 # ============================================================
 
 @st.cache_resource
@@ -220,28 +238,38 @@ def train_model():
 
         return None, None, None
 
+    # Load dataset
     df = pd.read_csv(
         dataset_path
     )
 
-    df = prepare_data(df)
+    # Prepare dataset
+    df = prepare_data(
+        df
+    )
 
+    # Check target
     if "Churn" not in df.columns:
 
         return None, None, None
 
-    # Remove missing target values
+    # Remove rows with missing target
     df = df.dropna(
         subset=["Churn"]
     )
 
+    # Features
     X = df.drop(
         columns=["Churn"]
     )
 
+    # Target
     y = df["Churn"].astype(int)
 
-    # Numerical columns
+    # ========================================================
+    # COLUMN TYPES
+    # ========================================================
+
     numerical_columns = X.select_dtypes(
         include=[
             "int64",
@@ -251,7 +279,6 @@ def train_model():
         ]
     ).columns.tolist()
 
-    # Categorical columns
     categorical_columns = X.select_dtypes(
         include=[
             "object",
@@ -260,7 +287,10 @@ def train_model():
         ]
     ).columns.tolist()
 
-    # Numerical preprocessing
+    # ========================================================
+    # NUMERICAL PIPELINE
+    # ========================================================
+
     numerical_pipeline = Pipeline(
         steps=[
             (
@@ -276,7 +306,10 @@ def train_model():
         ]
     )
 
-    # Categorical preprocessing
+    # ========================================================
+    # CATEGORICAL PIPELINE
+    # ========================================================
+
     categorical_pipeline = Pipeline(
         steps=[
             (
@@ -294,7 +327,10 @@ def train_model():
         ]
     )
 
-    # Preprocessor
+    # ========================================================
+    # PREPROCESSOR
+    # ========================================================
+
     preprocessor = ColumnTransformer(
         transformers=[
             (
@@ -310,14 +346,20 @@ def train_model():
         ]
     )
 
-    # Logistic Regression
+    # ========================================================
+    # CLASSIFICATION MODEL
+    # ========================================================
+
     classifier = LogisticRegression(
         max_iter=2000,
         class_weight="balanced",
         random_state=42
     )
 
-    # Complete model pipeline
+    # ========================================================
+    # COMPLETE PIPELINE
+    # ========================================================
+
     pipeline = Pipeline(
         steps=[
             (
@@ -325,28 +367,37 @@ def train_model():
                 preprocessor
             ),
             (
-                "model",
+                "classifier",
                 classifier
             )
         ]
     )
 
-    # Train/test split
+    # ========================================================
+    # TRAIN / TEST SPLIT
+    # ========================================================
+
     X_train, X_test, y_train, y_test = train_test_split(
         X,
         y,
-        test_size=0.2,
+        test_size=0.20,
         random_state=42,
         stratify=y
     )
 
-    # Train
+    # ========================================================
+    # TRAIN
+    # ========================================================
+
     pipeline.fit(
         X_train,
         y_train
     )
 
-    # Test
+    # ========================================================
+    # TEST
+    # ========================================================
+
     y_pred = pipeline.predict(
         X_test
     )
@@ -356,7 +407,27 @@ def train_model():
         y_pred
     )
 
-    # Save model
+    # Classification report
+    report = classification_report(
+        y_test,
+        y_pred,
+        target_names=[
+            "No Churn",
+            "Churn"
+        ],
+        output_dict=True
+    )
+
+    # Confusion matrix
+    matrix = confusion_matrix(
+        y_test,
+        y_pred
+    )
+
+    # ========================================================
+    # SAVE MODEL
+    # ========================================================
+
     try:
 
         joblib.dump(
@@ -365,12 +436,15 @@ def train_model():
         )
 
     except Exception:
+
         pass
 
     return (
         pipeline,
         accuracy,
-        X.columns.tolist()
+        X.columns.tolist(),
+        report,
+        matrix
     )
 
 
@@ -383,9 +457,9 @@ def load_or_train_model():
 
     dataset_path = find_dataset()
 
-    # --------------------------------------------------------
-    # If model exists, try loading it
-    # --------------------------------------------------------
+    # ========================================================
+    # LOAD EXISTING MODEL
+    # ========================================================
 
     if os.path.exists(MODEL_FILE):
 
@@ -416,28 +490,34 @@ def load_or_train_model():
             return (
                 model,
                 None,
-                columns
+                columns,
+                None,
+                None
             )
 
         except Exception:
 
             pass
 
-    # --------------------------------------------------------
-    # Otherwise train a new model
-    # --------------------------------------------------------
+    # ========================================================
+    # TRAIN NEW MODEL
+    # ========================================================
 
     return train_model()
 
 
-model, accuracy, model_columns = load_or_train_model()
+model, accuracy, model_columns, report, matrix = (
+    load_or_train_model()
+)
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
-st.title("📞 Customer Churn Prediction")
+st.title(
+    "📞 Customer Churn Prediction"
+)
 
 st.write(
     "Enter the customer details below."
@@ -445,7 +525,7 @@ st.write(
 
 
 # ============================================================
-# INPUT FIELDS
+# INPUT FORM
 # ============================================================
 
 col1, col2 = st.columns(2)
@@ -479,7 +559,6 @@ with col1:
             0,
             1
         ],
-        format_func=lambda x: str(x),
         index=1
     )
 
@@ -651,7 +730,7 @@ with col2:
 
 
 # ============================================================
-# PREDICT BUTTON
+# PREDICTION BUTTON
 # ============================================================
 
 st.divider()
@@ -663,16 +742,24 @@ predict_button = st.button(
 
 
 # ============================================================
-# PREDICTION
+# CLASSIFICATION PREDICTION
 # ============================================================
 
 if predict_button:
 
-    # ========================================================
-    # MACHINE LEARNING MODEL
-    # ========================================================
+    if model is None:
 
-    if model is not None:
+        st.error(
+            "Classification model could not be loaded. "
+            "Please place the Telco Customer Churn CSV "
+            "in the same folder as app.py."
+        )
+
+    else:
+
+        # ====================================================
+        # CREATE CUSTOMER DATAFRAME
+        # ====================================================
 
         customer_data = pd.DataFrame(
             {
@@ -698,9 +785,9 @@ if predict_button:
             }
         )
 
-        # ----------------------------------------------------
-        # Match training columns
-        # ----------------------------------------------------
+        # ====================================================
+        # MATCH TRAINING COLUMNS
+        # ====================================================
 
         if model_columns is not None:
 
@@ -716,23 +803,50 @@ if predict_button:
 
         try:
 
-            # Prediction
+            # =================================================
+            # CLASSIFICATION
+            # =================================================
+
             prediction = model.predict(
                 customer_data
             )[0]
 
-            # Probability
+            # =================================================
+            # PROBABILITY
+            # =================================================
+
             probability = model.predict_proba(
                 customer_data
             )[0][1]
 
-            probability_percent = (
+            churn_probability = (
                 probability * 100
             )
 
-            # ------------------------------------------------
-            # CHURN RESULT
-            # ------------------------------------------------
+            stay_probability = (
+                100 - churn_probability
+            )
+
+            # =================================================
+            # 0-9 CHURN SCORE
+            # =================================================
+
+            churn_score = round(
+                probability * 9
+            )
+
+            # Keep score between 0 and 9
+            churn_score = max(
+                0,
+                min(
+                    9,
+                    churn_score
+                )
+            )
+
+            # =================================================
+            # CLASS 1 = CHURN
+            # =================================================
 
             if prediction == 1:
 
@@ -745,10 +859,24 @@ if predict_button:
                         </div>
 
                         <div class="prediction-probability">
+
+                            Classification:
+                            <strong>CHURN (1)</strong>
+
+                            <br>
+
                             Churn Probability:
                             <strong>
-                                {probability_percent:.2f}%
+                                {churn_probability:.2f}%
                             </strong>
+
+                            <br>
+
+                            Churn Score:
+                            <strong>
+                                {churn_score}/9
+                            </strong>
+
                         </div>
 
                     </div>
@@ -756,9 +884,9 @@ if predict_button:
                     unsafe_allow_html=True
                 )
 
-            # ------------------------------------------------
-            # STAY RESULT
-            # ------------------------------------------------
+            # =================================================
+            # CLASS 0 = NO CHURN
+            # =================================================
 
             else:
 
@@ -771,10 +899,24 @@ if predict_button:
                         </div>
 
                         <div class="prediction-probability">
+
+                            Classification:
+                            <strong>NO CHURN (0)</strong>
+
+                            <br>
+
                             Churn Probability:
                             <strong>
-                                {probability_percent:.2f}%
+                                {churn_probability:.2f}%
                             </strong>
+
+                            <br>
+
+                            Churn Score:
+                            <strong>
+                                {churn_score}/9
+                            </strong>
+
                         </div>
 
                     </div>
@@ -782,18 +924,12 @@ if predict_button:
                     unsafe_allow_html=True
                 )
 
-            # ------------------------------------------------
+            # =================================================
             # PROBABILITY
-            # ------------------------------------------------
+            # =================================================
 
             st.subheader(
-                "Prediction Confidence"
-            )
-
-            st.progress(
-                int(
-                    probability_percent
-                )
+                "Classification Probability"
             )
 
             probability_col1, probability_col2 = st.columns(2)
@@ -801,193 +937,93 @@ if predict_button:
             with probability_col1:
 
                 st.metric(
-                    "Churn Probability",
-                    f"{probability_percent:.2f}%"
+                    "No Churn (Class 0)",
+                    f"{stay_probability:.2f}%"
                 )
 
             with probability_col2:
 
                 st.metric(
-                    "Stay Probability",
-                    f"{100 - probability_percent:.2f}%"
+                    "Churn (Class 1)",
+                    f"{churn_probability:.2f}%"
+                )
+
+            st.progress(
+                int(churn_probability)
+            )
+
+            # =================================================
+            # CUSTOMER DETAILS
+            # =================================================
+
+            with st.expander(
+                "View Customer Details"
+            ):
+
+                summary = pd.DataFrame(
+                    {
+                        "Feature": [
+                            "Customer ID",
+                            "Gender",
+                            "Senior Citizen",
+                            "Partner",
+                            "Dependents",
+                            "Tenure (Months)",
+                            "Phone Service",
+                            "Multiple Lines",
+                            "Internet Service",
+                            "Online Security",
+                            "Online Backup",
+                            "Device Protection",
+                            "Tech Support",
+                            "Streaming TV",
+                            "Streaming Movies",
+                            "Contract",
+                            "Paperless Billing",
+                            "Payment Method",
+                            "Monthly Charges",
+                            "Total Charges"
+                        ],
+                        "Value": [
+                            customer_id,
+                            gender,
+                            senior_citizen,
+                            partner,
+                            dependents,
+                            tenure,
+                            phone_service,
+                            multiple_lines,
+                            internet_service,
+                            online_security,
+                            online_backup,
+                            device_protection,
+                            tech_support,
+                            streaming_tv,
+                            streaming_movies,
+                            contract,
+                            paperless_billing,
+                            payment_method,
+                            f"${monthly_charges:.2f}",
+                            f"${total_charges:.2f}"
+                        ]
+                    }
+                )
+
+                st.dataframe(
+                    summary,
+                    use_container_width=True,
+                    hide_index=True
                 )
 
         except Exception as e:
 
             st.error(
-                f"Prediction failed: {str(e)}"
-            )
-
-
-    # ========================================================
-    # FALLBACK RULE-BASED MODEL
-    # ========================================================
-
-    else:
-
-        score = 0
-
-        # Contract
-        if contract == "Month-to-month":
-
-            score += 2
-
-        elif contract == "One year":
-
-            score += 1
-
-        # Payment method
-        if payment_method == "Electronic check":
-
-            score += 1
-
-        # Paperless billing
-        if paperless_billing == "Yes":
-
-            score += 1
-
-        # Monthly charges
-        if monthly_charges >= 70:
-
-            score += 1
-
-        # Streaming services
-        if streaming_tv == "No":
-
-            score += 1
-
-        if streaming_movies == "No":
-
-            score += 1
-
-        # Total charges
-        if total_charges < 1000:
-
-            score += 1
-
-        # Convert score to approximate probability
-        probability_percent = min(
-            95,
-            max(
-                5,
-                score * 12
-            )
-        )
-
-        # Final prediction
-        if score >= 4:
-
-            st.markdown(
-                f"""
-                <div class="prediction-card churn">
-
-                    <div class="prediction-title">
-                        ⚠️ Customer is likely to CHURN
-                    </div>
-
-                    <div class="prediction-probability">
-                        Churn Score:
-                        <strong>
-                            {score}/9
-                        </strong>
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-        else:
-
-            st.markdown(
-                f"""
-                <div class="prediction-card no-churn">
-
-                    <div class="prediction-title">
-                        ✅ Customer is unlikely to CHURN
-                    </div>
-
-                    <div class="prediction-probability">
-                        Churn Score:
-                        <strong>
-                            {score}/9
-                        </strong>
-                    </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True
+                f"Classification failed: {str(e)}"
             )
 
 
 # ============================================================
-# CUSTOMER SUMMARY
-# ============================================================
-
-if predict_button:
-
-    with st.expander(
-        "View Customer Details"
-    ):
-
-        summary = pd.DataFrame(
-            {
-                "Feature": [
-                    "Customer ID",
-                    "Gender",
-                    "Senior Citizen",
-                    "Partner",
-                    "Dependents",
-                    "Tenure",
-                    "Phone Service",
-                    "Multiple Lines",
-                    "Internet Service",
-                    "Online Security",
-                    "Online Backup",
-                    "Device Protection",
-                    "Tech Support",
-                    "Streaming TV",
-                    "Streaming Movies",
-                    "Contract",
-                    "Paperless Billing",
-                    "Payment Method",
-                    "Monthly Charges",
-                    "Total Charges"
-                ],
-                "Value": [
-                    customer_id,
-                    gender,
-                    senior_citizen,
-                    partner,
-                    dependents,
-                    tenure,
-                    phone_service,
-                    multiple_lines,
-                    internet_service,
-                    online_security,
-                    online_backup,
-                    device_protection,
-                    tech_support,
-                    streaming_tv,
-                    streaming_movies,
-                    contract,
-                    paperless_billing,
-                    payment_method,
-                    f"${monthly_charges:.2f}",
-                    f"${total_charges:.2f}"
-                ]
-            }
-        )
-
-        st.dataframe(
-            summary,
-            use_container_width=True,
-            hide_index=True
-        )
-
-
-# ============================================================
-# SIDEBAR
+# SIDEBAR - MODEL INFORMATION
 # ============================================================
 
 with st.sidebar:
@@ -999,7 +1035,7 @@ with st.sidebar:
     if model is not None:
 
         st.success(
-            "Machine Learning Model Loaded"
+            "Classification Model Loaded"
         )
 
         st.write(
@@ -1007,7 +1043,19 @@ with st.sidebar:
         )
 
         st.write(
-            "**Preprocessing:** One-Hot Encoding"
+            "**Problem:** Binary Classification"
+        )
+
+        st.write(
+            "**Class 0:** No Churn"
+        )
+
+        st.write(
+            "**Class 1:** Churn"
+        )
+
+        st.write(
+            "**Encoding:** One-Hot Encoding"
         )
 
         st.write(
@@ -1023,16 +1071,12 @@ with st.sidebar:
 
     else:
 
-        st.warning(
-            "ML model not available"
-        )
-
-        st.write(
-            "Using rule-based churn prediction."
+        st.error(
+            "Model not available"
         )
 
     st.divider()
 
     st.caption(
-        "Customer Churn Prediction App"
+        "Customer Churn Prediction"
     )
