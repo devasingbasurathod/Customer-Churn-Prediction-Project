@@ -21,98 +21,191 @@ st.set_page_config(
 
 
 # ============================================================
-# LOAD DATA
+# LOAD DATASET
 # ============================================================
 
 @st.cache_data
 def load_data():
-    df = pd.read_csv("cleaned_data.csv")
 
-    # Remove unnecessary index column if present
-    if "Unnamed: 0" in df.columns:
-        df = df.drop(columns=["Unnamed: 0"])
+    try:
+        data = pd.read_csv("cleaned_data.csv")
+    except FileNotFoundError:
+        st.error("❌ cleaned_data.csv file not found.")
+        st.stop()
 
-    return df
+    # Remove unwanted index column
+    if "Unnamed: 0" in data.columns:
+        data = data.drop(columns=["Unnamed: 0"])
+
+    return data
 
 
 df = load_data()
 
 
 # ============================================================
-# PREPARE DATA
+# CHECK DATASET
 # ============================================================
 
-# Convert TotalCharges to numeric if it exists
+if df.empty:
+    st.error("❌ The dataset is empty.")
+    st.stop()
+
+
+if "Churn" not in df.columns:
+    st.error(
+        "❌ 'Churn' column is missing from cleaned_data.csv."
+    )
+
+    st.write("Available columns:")
+    st.write(df.columns.tolist())
+
+    st.stop()
+
+
+# ============================================================
+# CLEAN DATA
+# ============================================================
+
+# Convert TotalCharges to numeric
 if "TotalCharges" in df.columns:
+
     df["TotalCharges"] = pd.to_numeric(
         df["TotalCharges"],
         errors="coerce"
     )
 
-# Fill missing numeric values
-for column in df.select_dtypes(include=["number"]).columns:
-    df[column] = df[column].fillna(df[column].median())
 
-# Fill missing categorical values
-for column in df.select_dtypes(include=["object"]).columns:
+# Fill numeric missing values
+numeric_cols = df.select_dtypes(
+    include=["number"]
+).columns
+
+for column in numeric_cols:
+
+    if df[column].isna().any():
+
+        median_value = df[column].median()
+
+        if pd.isna(median_value):
+            median_value = 0
+
+        df[column] = df[column].fillna(
+            median_value
+        )
+
+
+# Fill categorical missing values
+categorical_cols = df.select_dtypes(
+    include=["object"]
+).columns
+
+for column in categorical_cols:
+
     df[column] = df[column].fillna("Unknown")
 
 
 # ============================================================
-# CHECK TARGET COLUMN
+# PREPARE CHURN TARGET
 # ============================================================
 
-if "Churn" not in df.columns:
-    st.error(
-        "❌ The column 'Churn' was not found in cleaned_data.csv. "
-        "Please check your CSV file."
-    )
-    st.stop()
+def convert_churn(value):
+
+    # Already numeric
+    if isinstance(value, (int, float)):
+
+        if value == 1:
+            return 1
+
+        if value == 0:
+            return 0
+
+    value = str(value).strip().lower()
+
+    if value in [
+        "yes",
+        "y",
+        "1",
+        "true",
+        "churn",
+        "churned"
+    ]:
+        return 1
+
+    if value in [
+        "no",
+        "n",
+        "0",
+        "false",
+        "not churn",
+        "not churned"
+    ]:
+        return 0
+
+    return None
 
 
-# ============================================================
-# PREPARE TARGET
-# ============================================================
+y = df["Churn"].apply(convert_churn)
 
-y = df["Churn"].copy()
 
-# Convert Yes/No target into 1/0
-if y.dtype == "object":
-    y = (
-        y.astype(str)
-        .str.strip()
-        .str.lower()
-        .map({
-            "yes": 1,
-            "no": 0
-        })
-    )
-
-# Remove rows where target could not be converted
+# Remove invalid target rows
 valid_rows = y.notna()
 
 df = df.loc[valid_rows].copy()
+
 y = y.loc[valid_rows].astype(int)
+
+
+# ============================================================
+# CHECK TARGET
+# ============================================================
+
+if len(df) < 2:
+
+    st.error(
+        "❌ Not enough valid records to train the model."
+    )
+
+    st.stop()
+
+
+if y.nunique() < 2:
+
+    st.error(
+        "❌ Churn column must contain both "
+        "Churn and Not Churn records."
+    )
+
+    st.stop()
 
 
 # ============================================================
 # PREPARE FEATURES
 # ============================================================
 
-X = df.drop(columns=["Churn"])
+X = df.drop(
+    columns=["Churn"]
+)
 
-# Customer ID is an identifier, not a useful predictive feature
+
+# Customer ID is only an identifier
+# and should not be used for prediction.
+
 if "customerID" in X.columns:
-    X = X.drop(columns=["customerID"])
+
+    X = X.drop(
+        columns=["customerID"]
+    )
 
 
 # ============================================================
-# IDENTIFY COLUMNS
+# IDENTIFY COLUMN TYPES
 # ============================================================
 
 categorical_columns = X.select_dtypes(
     include=["object"]
 ).columns.tolist()
+
 
 numeric_columns = X.select_dtypes(
     exclude=["object"]
@@ -124,18 +217,25 @@ numeric_columns = X.select_dtypes(
 # ============================================================
 
 preprocessor = ColumnTransformer(
+
     transformers=[
+
         (
             "categorical",
+
             OneHotEncoder(
                 handle_unknown="ignore",
                 sparse_output=False
             ),
+
             categorical_columns
         ),
+
         (
             "numeric",
+
             "passthrough",
+
             numeric_columns
         )
     ]
@@ -143,24 +243,38 @@ preprocessor = ColumnTransformer(
 
 
 # ============================================================
-# MODEL
+# MACHINE LEARNING MODEL
 # ============================================================
 
-model = RandomForestClassifier(
+classifier = RandomForestClassifier(
+
     n_estimators=200,
+
     random_state=42,
-    class_weight="balanced"
+
+    class_weight="balanced",
+
+    n_jobs=-1
 )
 
 
 # ============================================================
-# COMPLETE PIPELINE
+# PIPELINE
 # ============================================================
 
 pipeline = Pipeline(
+
     steps=[
-        ("preprocessor", preprocessor),
-        ("model", model)
+
+        (
+            "preprocessor",
+            preprocessor
+        ),
+
+        (
+            "classifier",
+            classifier
+        )
     ]
 )
 
@@ -171,37 +285,95 @@ pipeline = Pipeline(
 
 @st.cache_resource
 def train_model(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(
-        X,
-        y,
-        test_size=0.20,
-        random_state=42,
-        stratify=y
+
+    class_counts = y.value_counts()
+
+    # If dataset is very small
+    if len(X) < 5:
+
+        pipeline.fit(
+            X,
+            y
+        )
+
+        return pipeline, None
+
+
+    # Stratified split only when
+    # every class has at least 2 records.
+
+    if class_counts.min() >= 2:
+
+        X_train, X_test, y_train, y_test = train_test_split(
+
+            X,
+
+            y,
+
+            test_size=0.20,
+
+            random_state=42,
+
+            stratify=y
+        )
+
+    else:
+
+        X_train, X_test, y_train, y_test = train_test_split(
+
+            X,
+
+            y,
+
+            test_size=0.20,
+
+            random_state=42
+        )
+
+
+    # Train model
+    pipeline.fit(
+        X_train,
+        y_train
     )
 
-    pipeline.fit(X_train, y_train)
 
-    predictions = pipeline.predict(X_test)
+    # Test model
+    predictions = pipeline.predict(
+        X_test
+    )
+
 
     accuracy = accuracy_score(
         y_test,
         predictions
     )
 
+
     return pipeline, accuracy
 
 
-pipeline, accuracy = train_model(X, y)
+# ============================================================
+# TRAIN
+# ============================================================
+
+pipeline, accuracy = train_model(
+    X,
+    y
+)
 
 
 # ============================================================
 # HEADER
 # ============================================================
 
-st.title("📞 Customer Churn Prediction")
+st.title(
+    "📞 Customer Churn Prediction"
+)
+
 st.write(
-    "Enter the customer details below to predict whether "
-    "the customer is likely to churn."
+    "Enter the customer details below "
+    "to predict customer churn."
 )
 
 
@@ -209,46 +381,81 @@ st.write(
 # MODEL PERFORMANCE
 # ============================================================
 
-st.info(
-    f"🤖 Model Accuracy: {accuracy * 100:.2f}%"
-)
+if accuracy is not None:
+
+    st.info(
+        f"🤖 Model Accuracy: "
+        f"{accuracy * 100:.2f}%"
+    )
+
+else:
+
+    st.info(
+        "🤖 Model trained successfully."
+    )
 
 
 # ============================================================
-# INPUT FIELDS
+# INPUT SECTION
 # ============================================================
+
+st.divider()
 
 col1, col2, col3 = st.columns(3)
 
 
+# ============================================================
+# CUSTOMER INFORMATION
+# ============================================================
+
 with col1:
 
-    st.subheader("👤 Customer Information")
+    st.subheader(
+        "👤 Customer Information"
+    )
+
 
     customerID = st.text_input(
         "Customer ID",
         value="CUST001"
     )
 
+
     gender = st.selectbox(
         "Gender",
-        ["Male", "Female"]
+        [
+            "Male",
+            "Female"
+        ]
     )
+
 
     SeniorCitizen = st.selectbox(
         "Senior Citizen",
-        [0, 1]
+        [
+            0,
+            1
+        ]
     )
+
 
     Partner = st.selectbox(
         "Partner",
-        ["Yes", "No"]
+        [
+            "Yes",
+            "No"
+        ]
     )
+
 
     Dependents = st.selectbox(
         "Dependents",
-        ["Yes", "No"]
+        [
+            "Yes",
+            "No"
+        ]
     )
+
 
     tenure = st.number_input(
         "Tenure (Months)",
@@ -258,59 +465,116 @@ with col1:
     )
 
 
+# ============================================================
+# SERVICES
+# ============================================================
+
 with col2:
 
-    st.subheader("📱 Services")
+    st.subheader(
+        "📱 Services"
+    )
+
 
     PhoneService = st.selectbox(
         "Phone Service",
-        ["Yes", "No"]
+        [
+            "Yes",
+            "No"
+        ]
     )
+
 
     MultipleLines = st.selectbox(
         "Multiple Lines",
-        ["No", "Yes", "No phone service"]
+        [
+            "No",
+            "Yes",
+            "No phone service"
+        ]
     )
+
 
     InternetService = st.selectbox(
         "Internet Service",
-        ["DSL", "Fiber optic", "No"]
+        [
+            "DSL",
+            "Fiber optic",
+            "No"
+        ]
     )
+
 
     OnlineSecurity = st.selectbox(
         "Online Security",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
+
 
     OnlineBackup = st.selectbox(
         "Online Backup",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
+
 
     DeviceProtection = st.selectbox(
         "Device Protection",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
+
 
     TechSupport = st.selectbox(
         "Tech Support",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
 
+
+# ============================================================
+# SUBSCRIPTION INFORMATION
+# ============================================================
 
 with col3:
 
-    st.subheader("📺 Subscription")
+    st.subheader(
+        "📺 Subscription"
+    )
+
 
     StreamingTV = st.selectbox(
         "Streaming TV",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
+
 
     StreamingMovies = st.selectbox(
         "Streaming Movies",
-        ["Yes", "No", "No internet service"]
+        [
+            "Yes",
+            "No",
+            "No internet service"
+        ]
     )
+
 
     Contract = st.selectbox(
         "Contract",
@@ -321,10 +585,15 @@ with col3:
         ]
     )
 
+
     PaperlessBilling = st.selectbox(
         "Paperless Billing",
-        ["Yes", "No"]
+        [
+            "Yes",
+            "No"
+        ]
     )
+
 
     PaymentMethod = st.selectbox(
         "Payment Method",
@@ -336,11 +605,13 @@ with col3:
         ]
     )
 
+
     MonthlyCharges = st.number_input(
         "Monthly Charges",
         min_value=0.0,
         value=70.0
     )
+
 
     TotalCharges = st.number_input(
         "Total Charges",
@@ -350,106 +621,257 @@ with col3:
 
 
 # ============================================================
-# PREDICTION
+# PREDICTION BUTTON
 # ============================================================
 
 st.divider()
+
 
 if st.button(
     "🔍 Predict Customer Churn",
     use_container_width=True
 ):
 
-    input_data = pd.DataFrame([{
+    # --------------------------------------------------------
+    # Create input dataframe
+    # --------------------------------------------------------
 
-        "customerID": customerID,
+    input_data = pd.DataFrame([
 
-        "gender": gender,
+        {
 
-        "SeniorCitizen": SeniorCitizen,
+            "customerID": customerID,
 
-        "Partner": Partner,
+            "gender": gender,
 
-        "Dependents": Dependents,
+            "SeniorCitizen": SeniorCitizen,
 
-        "tenure": tenure,
+            "Partner": Partner,
 
-        "PhoneService": PhoneService,
+            "Dependents": Dependents,
 
-        "MultipleLines": MultipleLines,
+            "tenure": tenure,
 
-        "InternetService": InternetService,
+            "PhoneService": PhoneService,
 
-        "OnlineSecurity": OnlineSecurity,
+            "MultipleLines": MultipleLines,
 
-        "OnlineBackup": OnlineBackup,
+            "InternetService": InternetService,
 
-        "DeviceProtection": DeviceProtection,
+            "OnlineSecurity": OnlineSecurity,
 
-        "TechSupport": TechSupport,
+            "OnlineBackup": OnlineBackup,
 
-        "StreamingTV": StreamingTV,
+            "DeviceProtection": DeviceProtection,
 
-        "StreamingMovies": StreamingMovies,
+            "TechSupport": TechSupport,
 
-        "Contract": Contract,
+            "StreamingTV": StreamingTV,
 
-        "PaperlessBilling": PaperlessBilling,
+            "StreamingMovies": StreamingMovies,
 
-        "PaymentMethod": PaymentMethod,
+            "Contract": Contract,
 
-        "MonthlyCharges": MonthlyCharges,
+            "PaperlessBilling": PaperlessBilling,
 
-        "TotalCharges": TotalCharges
+            "PaymentMethod": PaymentMethod,
 
-    }])
+            "MonthlyCharges": MonthlyCharges,
+
+            "TotalCharges": TotalCharges
+
+        }
+
+    ])
 
 
-    # Remove Customer ID because it wasn't used for training
+    # --------------------------------------------------------
+    # Remove customer ID
+    # --------------------------------------------------------
+
     if "customerID" in input_data.columns:
+
         input_data = input_data.drop(
             columns=["customerID"]
         )
 
 
-    # Make prediction
-    prediction = pipeline.predict(input_data)[0]
+    # --------------------------------------------------------
+    # Match training columns
+    # --------------------------------------------------------
+
+    # Add missing training columns
+    for column in X.columns:
+
+        if column not in input_data.columns:
+
+            if column in numeric_columns:
+
+                input_data[column] = 0
+
+            else:
+
+                input_data[column] = "Unknown"
 
 
-    # Get probability
-    probability = pipeline.predict_proba(
-        input_data
-    )[0][1]
+    # Keep exactly the same columns
+    # and same order as training data.
+
+    input_data = input_data[
+        X.columns
+    ]
 
 
-    # ========================================================
-    # DISPLAY RESULT
-    # ========================================================
+    # --------------------------------------------------------
+    # Prediction
+    # --------------------------------------------------------
 
-    st.subheader("📊 Prediction Result")
+    try:
+
+        prediction = pipeline.predict(
+            input_data
+        )[0]
 
 
-    if prediction == 1:
+        # Probability
+        probabilities = pipeline.predict_proba(
+            input_data
+        )[0]
+
+
+        churn_probability = probabilities[1]
+
+
+        # ----------------------------------------------------
+        # RESULT
+        # ----------------------------------------------------
+
+        st.subheader(
+            "📊 Prediction Result"
+        )
+
+
+        if prediction == 1:
+
+            st.error(
+                "⚠️ Customer is likely to Churn."
+            )
+
+        else:
+
+            st.success(
+                "✅ Customer is NOT likely to Churn."
+            )
+
+
+        # ----------------------------------------------------
+        # Probability
+        # ----------------------------------------------------
+
+        st.metric(
+            "Churn Probability",
+            f"{churn_probability * 100:.2f}%"
+        )
+
+
+        # Progress bar
+        st.progress(
+            float(churn_probability)
+        )
+
+
+        # ----------------------------------------------------
+        # Customer Summary
+        # ----------------------------------------------------
+
+        st.subheader(
+            "📋 Customer Summary"
+        )
+
+
+        summary_col1, summary_col2, summary_col3 = st.columns(3)
+
+
+        with summary_col1:
+
+            st.write(
+                f"**Customer ID:** {customerID}"
+            )
+
+            st.write(
+                f"**Gender:** {gender}"
+            )
+
+            st.write(
+                f"**Senior Citizen:** {SeniorCitizen}"
+            )
+
+
+        with summary_col2:
+
+            st.write(
+                f"**Tenure:** {tenure} months"
+            )
+
+            st.write(
+                f"**Contract:** {Contract}"
+            )
+
+            st.write(
+                f"**Internet Service:** {InternetService}"
+            )
+
+
+        with summary_col3:
+
+            st.write(
+                f"**Monthly Charges:** "
+                f"${MonthlyCharges:.2f}"
+            )
+
+            st.write(
+                f"**Total Charges:** "
+                f"${TotalCharges:.2f}"
+            )
+
+            st.write(
+                f"**Payment Method:** "
+                f"{PaymentMethod}"
+            )
+
+
+    except Exception as e:
 
         st.error(
-            "⚠️ Customer is likely to Churn."
+            "❌ Prediction failed."
         )
 
-        st.metric(
-            "Churn Probability",
-            f"{probability * 100:.2f}%"
-        )
+        st.exception(e)
 
-    else:
 
-        st.success(
-            "✅ Customer is NOT likely to Churn."
-        )
+# ============================================================
+# DATASET INFORMATION
+# ============================================================
 
-        st.metric(
-            "Churn Probability",
-            f"{probability * 100:.2f}%"
-        )
+with st.expander(
+    "📁 Dataset Information"
+):
+
+    st.write(
+        f"Total records: {len(df)}"
+    )
+
+    st.write(
+        f"Total features: {len(X.columns)}"
+    )
+
+    st.write(
+        "Features used by model:"
+    )
+
+    st.write(
+        X.columns.tolist()
+    )
 
 
 # ============================================================
@@ -459,6 +881,6 @@ if st.button(
 st.divider()
 
 st.caption(
-    "📞 Customer Churn Prediction System | "
-    "Built with Streamlit & Machine Learning"
+    "📞 Customer Churn Prediction System "
+    "| Built with Streamlit & Machine Learning"
 )
