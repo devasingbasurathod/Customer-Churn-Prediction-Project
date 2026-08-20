@@ -1,20 +1,59 @@
+import os
+import warnings
+import joblib
+import numpy as np
+import pandas as pd
 import streamlit as st
+
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+warnings.filterwarnings("ignore")
+
+
+# ============================================================
+# PAGE CONFIGURATION
+# ============================================================
 
 st.set_page_config(
     page_title="Customer Churn Prediction",
-    layout="wide"
+    page_icon="📞",
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# Custom styling
-st.markdown("""
-<style>
+
+# ============================================================
+# CUSTOM CSS
+# ============================================================
+
+st.markdown(
+    """
+    <style>
+
     .stApp {
         background-color: #0e0f14;
         color: white;
     }
 
+    .main {
+        padding-top: 2rem;
+    }
+
+    h1 {
+        font-size: 2.7rem !important;
+        font-weight: 700 !important;
+        color: #f5f5f5;
+    }
+
     label {
         color: white !important;
+        font-weight: 500 !important;
     }
 
     div[data-baseweb="select"] > div {
@@ -37,146 +76,963 @@ st.markdown("""
         border-radius: 8px;
     }
 
-    .stButton button {
+    /* Buttons */
+
+    .stButton > button {
+        width: 100%;
+        border-radius: 9px;
+        height: 3rem;
+        font-size: 18px;
+        font-weight: 600;
         background-color: transparent;
         color: white;
         border: 1px solid #555;
-        border-radius: 9px;
     }
 
-    .stButton button:hover {
+    .stButton > button:hover {
         border-color: white;
         color: white;
     }
 
-    .success {
-        background-color: #173d27;
-        color: #72e69a;
-        padding: 15px;
-        border-radius: 8px;
+    /* Prediction cards */
+
+    .prediction-card {
+        padding: 25px;
+        border-radius: 12px;
         margin-top: 20px;
+        text-align: center;
     }
 
-    .danger {
+    .churn {
         background-color: #4a2025;
         color: #ff8585;
-        padding: 15px;
-        border-radius: 8px;
-        margin-top: 20px;
+        border: 1px solid #ff4b4b;
     }
-</style>
-""", unsafe_allow_html=True)
 
+    .no-churn {
+        background-color: #173d27;
+        color: #72e69a;
+        border: 1px solid #21c55d;
+    }
 
-# -------------------------
-# Input fields
-# -------------------------
+    .prediction-title {
+        font-size: 28px;
+        font-weight: 700;
+        margin-bottom: 10px;
+    }
 
-streaming_tv = st.selectbox(
-    "Streaming TV",
-    ["Yes", "No"],
-    index=0
-)
+    .prediction-probability {
+        font-size: 20px;
+        font-weight: 500;
+    }
 
-streaming_movies = st.selectbox(
-    "Streaming Movies",
-    ["Yes", "No"],
-    index=0
-)
-
-contract = st.selectbox(
-    "Contract",
-    ["Month-to-month", "One year", "Two year"],
-    index=0
-)
-
-paperless_billing = st.selectbox(
-    "Paperless Billing",
-    ["Yes", "No"],
-    index=0
-)
-
-payment_method = st.selectbox(
-    "Payment Method",
-    [
-        "Electronic check",
-        "Mailed check",
-        "Bank transfer (automatic)",
-        "Credit card (automatic)"
-    ],
-    index=0
-)
-
-monthly_charges = st.number_input(
-    "Monthly Charges",
-    min_value=0.0,
-    value=70.00,
-    step=1.0,
-    format="%.2f"
-)
-
-total_charges = st.number_input(
-    "Total Charges",
-    min_value=0.0,
-    value=1000.00,
-    step=10.0,
-    format="%.2f"
+    </style>
+    """,
+    unsafe_allow_html=True
 )
 
 
-# -------------------------
-# Churn prediction
-# -------------------------
+# ============================================================
+# FILE LOCATIONS
+# ============================================================
 
-if st.button("🔍 Predict Churn"):
+MODEL_FILE = "churn_model.pkl"
 
-    score = 0
+DATA_FILES = [
+    "WA_Fn-UseC_-Telco-Customer-Churn.csv",
+    "telco_churn.csv",
+    "Telco-Customer-Churn.csv",
+    "customer_churn.csv",
+    "data.csv"
+]
 
-    # Contract
-    if contract == "Month-to-month":
-        score += 2
-    elif contract == "One year":
-        score += 1
 
-    # Payment method
-    if payment_method == "Electronic check":
-        score += 1
+# ============================================================
+# FIND DATASET
+# ============================================================
 
-    # Paperless billing
-    if paperless_billing == "Yes":
-        score += 1
+def find_dataset():
 
-    # Monthly charges
-    if monthly_charges >= 70:
-        score += 1
+    for file in DATA_FILES:
 
-    # Streaming services
-    if streaming_tv == "No":
-        score += 1
+        if os.path.exists(file):
+            return file
 
-    if streaming_movies == "No":
-        score += 1
+    return None
 
-    # Total charges
-    if total_charges < 1000:
-        score += 1
 
-    # Final prediction
-    if score >= 4:
-        st.markdown(
-            """
-            <div class="danger">
-                ⚠️ Customer is likely to churn
-            </div>
-            """,
-            unsafe_allow_html=True
+# ============================================================
+# PREPARE DATA
+# ============================================================
+
+def prepare_data(df):
+
+    df = df.copy()
+
+    # Remove spaces from column names
+    df.columns = df.columns.str.strip()
+
+    # Convert TotalCharges to numeric
+    if "TotalCharges" in df.columns:
+
+        df["TotalCharges"] = pd.to_numeric(
+            df["TotalCharges"],
+            errors="coerce"
         )
+
+    # Convert Churn target
+    if "Churn" in df.columns:
+
+        df["Churn"] = (
+            df["Churn"]
+            .astype(str)
+            .str.strip()
+            .map(
+                {
+                    "Yes": 1,
+                    "No": 0,
+                    "1": 1,
+                    "0": 0
+                }
+            )
+        )
+
+    # Customer ID should not be used as a model feature
+    if "customerID" in df.columns:
+
+        df = df.drop(
+            columns=["customerID"]
+        )
+
+    return df
+
+
+# ============================================================
+# TRAIN MODEL
+# ============================================================
+
+@st.cache_resource
+def train_model():
+
+    dataset_path = find_dataset()
+
+    if dataset_path is None:
+
+        return None, None, None
+
+    df = pd.read_csv(
+        dataset_path
+    )
+
+    df = prepare_data(df)
+
+    if "Churn" not in df.columns:
+
+        return None, None, None
+
+    # Remove missing target values
+    df = df.dropna(
+        subset=["Churn"]
+    )
+
+    X = df.drop(
+        columns=["Churn"]
+    )
+
+    y = df["Churn"].astype(int)
+
+    # Numerical columns
+    numerical_columns = X.select_dtypes(
+        include=[
+            "int64",
+            "float64",
+            "int32",
+            "float32"
+        ]
+    ).columns.tolist()
+
+    # Categorical columns
+    categorical_columns = X.select_dtypes(
+        include=[
+            "object",
+            "category",
+            "bool"
+        ]
+    ).columns.tolist()
+
+    # Numerical preprocessing
+    numerical_pipeline = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="median"
+                )
+            ),
+            (
+                "scaler",
+                StandardScaler()
+            )
+        ]
+    )
+
+    # Categorical preprocessing
+    categorical_pipeline = Pipeline(
+        steps=[
+            (
+                "imputer",
+                SimpleImputer(
+                    strategy="most_frequent"
+                )
+            ),
+            (
+                "encoder",
+                OneHotEncoder(
+                    handle_unknown="ignore"
+                )
+            )
+        ]
+    )
+
+    # Preprocessor
+    preprocessor = ColumnTransformer(
+        transformers=[
+            (
+                "num",
+                numerical_pipeline,
+                numerical_columns
+            ),
+            (
+                "cat",
+                categorical_pipeline,
+                categorical_columns
+            )
+        ]
+    )
+
+    # Logistic Regression
+    classifier = LogisticRegression(
+        max_iter=2000,
+        class_weight="balanced",
+        random_state=42
+    )
+
+    # Complete model pipeline
+    pipeline = Pipeline(
+        steps=[
+            (
+                "preprocessor",
+                preprocessor
+            ),
+            (
+                "model",
+                classifier
+            )
+        ]
+    )
+
+    # Train/test split
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=0.2,
+        random_state=42,
+        stratify=y
+    )
+
+    # Train
+    pipeline.fit(
+        X_train,
+        y_train
+    )
+
+    # Test
+    y_pred = pipeline.predict(
+        X_test
+    )
+
+    accuracy = accuracy_score(
+        y_test,
+        y_pred
+    )
+
+    # Save model
+    try:
+
+        joblib.dump(
+            pipeline,
+            MODEL_FILE
+        )
+
+    except Exception:
+        pass
+
+    return (
+        pipeline,
+        accuracy,
+        X.columns.tolist()
+    )
+
+
+# ============================================================
+# LOAD OR TRAIN MODEL
+# ============================================================
+
+@st.cache_resource
+def load_or_train_model():
+
+    dataset_path = find_dataset()
+
+    # --------------------------------------------------------
+    # If model exists, try loading it
+    # --------------------------------------------------------
+
+    if os.path.exists(MODEL_FILE):
+
+        try:
+
+            model = joblib.load(
+                MODEL_FILE
+            )
+
+            columns = None
+
+            if dataset_path is not None:
+
+                df = pd.read_csv(
+                    dataset_path
+                )
+
+                df = prepare_data(
+                    df
+                )
+
+                if "Churn" in df.columns:
+
+                    columns = df.drop(
+                        columns=["Churn"]
+                    ).columns.tolist()
+
+            return (
+                model,
+                None,
+                columns
+            )
+
+        except Exception:
+
+            pass
+
+    # --------------------------------------------------------
+    # Otherwise train a new model
+    # --------------------------------------------------------
+
+    return train_model()
+
+
+model, accuracy, model_columns = load_or_train_model()
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.title("📞 Customer Churn Prediction")
+
+st.write(
+    "Enter the customer details below."
+)
+
+
+# ============================================================
+# INPUT FIELDS
+# ============================================================
+
+col1, col2 = st.columns(2)
+
+
+# ============================================================
+# LEFT COLUMN
+# ============================================================
+
+with col1:
+
+    customer_id = st.number_input(
+        "Customer ID",
+        min_value=1,
+        value=225,
+        step=1
+    )
+
+    gender = st.selectbox(
+        "Gender",
+        [
+            "Male",
+            "Female"
+        ],
+        index=0
+    )
+
+    senior_citizen = st.selectbox(
+        "Senior Citizen",
+        [
+            0,
+            1
+        ],
+        format_func=lambda x: str(x),
+        index=1
+    )
+
+    partner = st.selectbox(
+        "Partner",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    dependents = st.selectbox(
+        "Dependents",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    tenure = st.number_input(
+        "Tenure (Months)",
+        min_value=0,
+        max_value=100,
+        value=12,
+        step=1
+    )
+
+    phone_service = st.selectbox(
+        "Phone Service",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    multiple_lines = st.selectbox(
+        "Multiple Lines",
+        [
+            "No phone service",
+            "No",
+            "Yes"
+        ],
+        index=1
+    )
+
+    internet_service = st.selectbox(
+        "Internet Service",
+        [
+            "DSL",
+            "Fiber optic",
+            "No"
+        ],
+        index=1
+    )
+
+    online_security = st.selectbox(
+        "Online Security",
+        [
+            "No internet service",
+            "No",
+            "Yes"
+        ],
+        index=1
+    )
+
+
+# ============================================================
+# RIGHT COLUMN
+# ============================================================
+
+with col2:
+
+    online_backup = st.selectbox(
+        "Online Backup",
+        [
+            "No internet service",
+            "No",
+            "Yes"
+        ],
+        index=1
+    )
+
+    device_protection = st.selectbox(
+        "Device Protection",
+        [
+            "No internet service",
+            "No",
+            "Yes"
+        ],
+        index=1
+    )
+
+    tech_support = st.selectbox(
+        "Tech Support",
+        [
+            "No internet service",
+            "No",
+            "Yes"
+        ],
+        index=1
+    )
+
+    streaming_tv = st.selectbox(
+        "Streaming TV",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    streaming_movies = st.selectbox(
+        "Streaming Movies",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    contract = st.selectbox(
+        "Contract",
+        [
+            "Month-to-month",
+            "One year",
+            "Two year"
+        ],
+        index=0
+    )
+
+    paperless_billing = st.selectbox(
+        "Paperless Billing",
+        [
+            "Yes",
+            "No"
+        ],
+        index=0
+    )
+
+    payment_method = st.selectbox(
+        "Payment Method",
+        [
+            "Electronic check",
+            "Mailed check",
+            "Bank transfer (automatic)",
+            "Credit card (automatic)"
+        ],
+        index=0
+    )
+
+    monthly_charges = st.number_input(
+        "Monthly Charges",
+        min_value=0.0,
+        value=70.00,
+        step=1.0,
+        format="%.2f"
+    )
+
+    total_charges = st.number_input(
+        "Total Charges",
+        min_value=0.0,
+        value=1000.00,
+        step=10.0,
+        format="%.2f"
+    )
+
+
+# ============================================================
+# PREDICT BUTTON
+# ============================================================
+
+st.divider()
+
+predict_button = st.button(
+    "🔍 Predict Churn",
+    type="primary"
+)
+
+
+# ============================================================
+# PREDICTION
+# ============================================================
+
+if predict_button:
+
+    # ========================================================
+    # MACHINE LEARNING MODEL
+    # ========================================================
+
+    if model is not None:
+
+        customer_data = pd.DataFrame(
+            {
+                "gender": [gender],
+                "SeniorCitizen": [senior_citizen],
+                "Partner": [partner],
+                "Dependents": [dependents],
+                "tenure": [tenure],
+                "PhoneService": [phone_service],
+                "MultipleLines": [multiple_lines],
+                "InternetService": [internet_service],
+                "OnlineSecurity": [online_security],
+                "OnlineBackup": [online_backup],
+                "DeviceProtection": [device_protection],
+                "TechSupport": [tech_support],
+                "StreamingTV": [streaming_tv],
+                "StreamingMovies": [streaming_movies],
+                "Contract": [contract],
+                "PaperlessBilling": [paperless_billing],
+                "PaymentMethod": [payment_method],
+                "MonthlyCharges": [monthly_charges],
+                "TotalCharges": [total_charges]
+            }
+        )
+
+        # ----------------------------------------------------
+        # Match training columns
+        # ----------------------------------------------------
+
+        if model_columns is not None:
+
+            for column in model_columns:
+
+                if column not in customer_data.columns:
+
+                    customer_data[column] = np.nan
+
+            customer_data = customer_data[
+                model_columns
+            ]
+
+        try:
+
+            # Prediction
+            prediction = model.predict(
+                customer_data
+            )[0]
+
+            # Probability
+            probability = model.predict_proba(
+                customer_data
+            )[0][1]
+
+            probability_percent = (
+                probability * 100
+            )
+
+            # ------------------------------------------------
+            # CHURN RESULT
+            # ------------------------------------------------
+
+            if prediction == 1:
+
+                st.markdown(
+                    f"""
+                    <div class="prediction-card churn">
+
+                        <div class="prediction-title">
+                            ⚠️ Customer is likely to CHURN
+                        </div>
+
+                        <div class="prediction-probability">
+                            Churn Probability:
+                            <strong>
+                                {probability_percent:.2f}%
+                            </strong>
+                        </div>
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            # ------------------------------------------------
+            # STAY RESULT
+            # ------------------------------------------------
+
+            else:
+
+                st.markdown(
+                    f"""
+                    <div class="prediction-card no-churn">
+
+                        <div class="prediction-title">
+                            ✅ Customer is unlikely to CHURN
+                        </div>
+
+                        <div class="prediction-probability">
+                            Churn Probability:
+                            <strong>
+                                {probability_percent:.2f}%
+                            </strong>
+                        </div>
+
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+
+            # ------------------------------------------------
+            # PROBABILITY
+            # ------------------------------------------------
+
+            st.subheader(
+                "Prediction Confidence"
+            )
+
+            st.progress(
+                int(
+                    probability_percent
+                )
+            )
+
+            probability_col1, probability_col2 = st.columns(2)
+
+            with probability_col1:
+
+                st.metric(
+                    "Churn Probability",
+                    f"{probability_percent:.2f}%"
+                )
+
+            with probability_col2:
+
+                st.metric(
+                    "Stay Probability",
+                    f"{100 - probability_percent:.2f}%"
+                )
+
+        except Exception as e:
+
+            st.error(
+                f"Prediction failed: {str(e)}"
+            )
+
+
+    # ========================================================
+    # FALLBACK RULE-BASED MODEL
+    # ========================================================
+
     else:
-        st.markdown(
-            """
-            <div class="success">
-                ✅ Customer is unlikely to churn
-            </div>
-            """,
-            unsafe_allow_html=True
+
+        score = 0
+
+        # Contract
+        if contract == "Month-to-month":
+
+            score += 2
+
+        elif contract == "One year":
+
+            score += 1
+
+        # Payment method
+        if payment_method == "Electronic check":
+
+            score += 1
+
+        # Paperless billing
+        if paperless_billing == "Yes":
+
+            score += 1
+
+        # Monthly charges
+        if monthly_charges >= 70:
+
+            score += 1
+
+        # Streaming services
+        if streaming_tv == "No":
+
+            score += 1
+
+        if streaming_movies == "No":
+
+            score += 1
+
+        # Total charges
+        if total_charges < 1000:
+
+            score += 1
+
+        # Convert score to approximate probability
+        probability_percent = min(
+            95,
+            max(
+                5,
+                score * 12
+            )
         )
+
+        # Final prediction
+        if score >= 4:
+
+            st.markdown(
+                f"""
+                <div class="prediction-card churn">
+
+                    <div class="prediction-title">
+                        ⚠️ Customer is likely to CHURN
+                    </div>
+
+                    <div class="prediction-probability">
+                        Churn Score:
+                        <strong>
+                            {score}/9
+                        </strong>
+                    </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+        else:
+
+            st.markdown(
+                f"""
+                <div class="prediction-card no-churn">
+
+                    <div class="prediction-title">
+                        ✅ Customer is unlikely to CHURN
+                    </div>
+
+                    <div class="prediction-probability">
+                        Churn Score:
+                        <strong>
+                            {score}/9
+                        </strong>
+                    </div>
+
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+
+
+# ============================================================
+# CUSTOMER SUMMARY
+# ============================================================
+
+if predict_button:
+
+    with st.expander(
+        "View Customer Details"
+    ):
+
+        summary = pd.DataFrame(
+            {
+                "Feature": [
+                    "Customer ID",
+                    "Gender",
+                    "Senior Citizen",
+                    "Partner",
+                    "Dependents",
+                    "Tenure",
+                    "Phone Service",
+                    "Multiple Lines",
+                    "Internet Service",
+                    "Online Security",
+                    "Online Backup",
+                    "Device Protection",
+                    "Tech Support",
+                    "Streaming TV",
+                    "Streaming Movies",
+                    "Contract",
+                    "Paperless Billing",
+                    "Payment Method",
+                    "Monthly Charges",
+                    "Total Charges"
+                ],
+                "Value": [
+                    customer_id,
+                    gender,
+                    senior_citizen,
+                    partner,
+                    dependents,
+                    tenure,
+                    phone_service,
+                    multiple_lines,
+                    internet_service,
+                    online_security,
+                    online_backup,
+                    device_protection,
+                    tech_support,
+                    streaming_tv,
+                    streaming_movies,
+                    contract,
+                    paperless_billing,
+                    payment_method,
+                    f"${monthly_charges:.2f}",
+                    f"${total_charges:.2f}"
+                ]
+            }
+        )
+
+        st.dataframe(
+            summary,
+            use_container_width=True,
+            hide_index=True
+        )
+
+
+# ============================================================
+# SIDEBAR
+# ============================================================
+
+with st.sidebar:
+
+    st.header(
+        "Model Information"
+    )
+
+    if model is not None:
+
+        st.success(
+            "Machine Learning Model Loaded"
+        )
+
+        st.write(
+            "**Algorithm:** Logistic Regression"
+        )
+
+        st.write(
+            "**Preprocessing:** One-Hot Encoding"
+        )
+
+        st.write(
+            "**Scaling:** StandardScaler"
+        )
+
+        if accuracy is not None:
+
+            st.metric(
+                "Model Accuracy",
+                f"{accuracy * 100:.2f}%"
+            )
+
+    else:
+
+        st.warning(
+            "ML model not available"
+        )
+
+        st.write(
+            "Using rule-based churn prediction."
+        )
+
+    st.divider()
+
+    st.caption(
+        "Customer Churn Prediction App"
+    )
