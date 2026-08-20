@@ -3,14 +3,21 @@ import pandas as pd
 import pickle
 
 # ----------------------------
-# Load Model
+# Load Model and Encoders
 # ----------------------------
-model = pickle.load(open("label_encoders.pkl", "rb"))
+with open("model.pkl", "rb") as file:
+    model = pickle.load(file)
+
+with open("label_encoders.pkl", "rb") as file:
+    label_encoders = pickle.load(file)
 
 # ----------------------------
 # Page Configuration
 # ----------------------------
-st.set_page_config(page_title="Customer Churn Prediction", layout="wide")
+st.set_page_config(
+    page_title="Customer Churn Prediction",
+    layout="wide"
+)
 
 st.title("📞 Customer Churn Prediction")
 st.write("Enter the customer details below.")
@@ -23,15 +30,32 @@ customerID = st.text_input("Customer ID")
 
 gender = st.selectbox("Gender", ["Male", "Female"])
 
-SeniorCitizen = st.selectbox("Senior Citizen", [0, 1])
+SeniorCitizen = st.selectbox(
+    "Senior Citizen",
+    [0, 1]
+)
 
-Partner = st.selectbox("Partner", ["Yes", "No"])
+Partner = st.selectbox(
+    "Partner",
+    ["Yes", "No"]
+)
 
-Dependents = st.selectbox("Dependents", ["Yes", "No"])
+Dependents = st.selectbox(
+    "Dependents",
+    ["Yes", "No"]
+)
 
-tenure = st.number_input("Tenure (Months)", 0, 100, 12)
+tenure = st.number_input(
+    "Tenure (Months)",
+    min_value=0,
+    max_value=100,
+    value=12
+)
 
-PhoneService = st.selectbox("Phone Service", ["Yes", "No"])
+PhoneService = st.selectbox(
+    "Phone Service",
+    ["Yes", "No"]
+)
 
 MultipleLines = st.selectbox(
     "Multiple Lines",
@@ -134,9 +158,52 @@ if st.button("🔍 Predict Churn"):
         "TotalCharges": TotalCharges
     }])
 
-    prediction = label_encoders.predict(input_data)[0]
-    st.write(type(label_encoders))
-    if prediction in ["Yes", 1]:
+    # ----------------------------
+    # Encode categorical columns
+    # ----------------------------
+
+    categorical_columns = [
+        "gender",
+        "Partner",
+        "Dependents",
+        "PhoneService",
+        "MultipleLines",
+        "InternetService",
+        "OnlineSecurity",
+        "OnlineBackup",
+        "DeviceProtection",
+        "TechSupport",
+        "StreamingTV",
+        "StreamingMovies",
+        "Contract",
+        "PaperlessBilling",
+        "PaymentMethod"
+    ]
+
+    for column in categorical_columns:
+        if column in label_encoders:
+            encoder = label_encoders[column]
+            input_data[column] = encoder.transform(
+                [input_data[column].iloc[0]]
+            )
+
+    # ----------------------------
+    # Customer ID
+    # ----------------------------
+    # Usually customerID should not be used by the ML model.
+    # Remove it if it was not part of model training.
+
+    input_data = input_data.drop(columns=["customerID"])
+
+    # ----------------------------
+    # Make Prediction
+    # ----------------------------
+
+    prediction = model.predict(input_data)[0]
+
+    st.write("Prediction:", prediction)
+
+    if prediction in ["Yes", 1, "1"]:
         st.error("⚠️ Customer is likely to Churn.")
     else:
         st.success("✅ Customer is NOT likely to Churn.")
